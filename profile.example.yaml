@@ -1,0 +1,68 @@
+# Standing facts reused on every application form.
+# Lines marked TODO are ones only you can answer - fill them once.
+identity:
+  full_name: Your Name
+  date_of_birth: 2000-01-01   # forms usually want DD/MM/YYYY
+  email: you@example.com
+  phone: "+44 7700 900123"
+  # used when a form has a separate dial-code selector, so +44 is not typed twice
+  phone_national: "7700 900123"
+  github: https://github.com/your-handle
+  linkedin: https://www.linkedin.com/in/your-handle
+  location: London, United Kingdom
+  country: United Kingdom
+  address: 1 Example Street, London, E1 1AA
+  postcode: E1 1AA
+  willing_to_relocate: "Yes"
+
+eligibility:
+  right_to_work_uk: TODO
+  visa_status: TODO
+  visa_expiry: TODO
+  # "Now" and "now or in the future" are different questions - answer each honestly.
+  requires_visa_sponsorship_now: TODO
+  requires_visa_sponsorship_future: TODO
+  authorised_for_indefinite_duration: TODO
+  needs_security_clearance: TODO
+  driving_licence: TODO
+
+availability:
+  notice_period: TODO
+  earliest_start: TODO
+  # Rule, not a fixed number: if the JD states a range, stay inside it.
+  salary_rule: stay inside the JD's range; otherwise use the defaults below
+  salary_range_default: TODO
+  salary_single_figure_default: TODO
+
+# Rule: a foundation year often has no degree-level
+# field an ATS will accept, and it is not worth fighting. When an education section
+# demands a qualification level the form will not take, DROP that entry and list the
+# university only. The degree is what matters; the foundation year is not load-bearing.
+education_rule: list the university only when a foundation entry cannot be completed
+education:
+  - institution: Example University
+    qualification: BSc Computer Science
+    dates: Sep 2023 - June 2026
+    grade: "2:1"
+  - institution: Example College
+    qualification: Foundation year
+    dates: Sep 2022 - June 2023
+    grade: TODO
+
+work_experience:
+  - employer: Example Ltd
+    title: Software Engineering Intern
+    start: 2025-06
+    end: 2025-09
+    location: London, United Kingdom
+    summary: >
+      One or two lines, written once, reused on every ATS that wants one row per job.
+
+evidence:
+  example_area:
+    - Facts, not prose. The cover-letter writer turns these into sentences.
+
+standard_answers:
+  how_did_you_hear: LinkedIn
+  references: "Available on request"
+  portfolio_or_website: https://github.com/your-handle

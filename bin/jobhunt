@@ -1,0 +1,293 @@
+#!/usr/bin/env python3
+"""jobhunt - local tracker + document builder for job applications.
+
+Stdlib only on purpose: no venv to rot, no pip on a PEP 668 system.
+
+  jobhunt new  -c "Company" -r "Role" [-u URL] [-s linkedin-easy|company|referral]
+                   ...JD on stdin...
+  jobhunt cover <slug>              build cover.docx from cover.md
+  jobhunt set   <slug> status=applied [note="..."] [next="..."] [stage="..."]
+  jobhunt list  [--status s] [--all]
+  jobhunt show  <slug>
+  jobhunt find  "<text>"            fuzzy-match an inbound email to an application
+  jobhunt stale [--days 14]
+"""
+import argparse, json, os, re, sys, unicodedata, zipfile
+from datetime import datetime, date, timezone
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DB = os.path.join(ROOT, "applications.json")
+APPS = os.path.join(ROOT, "apps")
+
+STATUSES = ["drafting", "applied", "acknowledged", "assessment", "interview",
+            "offer", "rejected", "ghosted", "withdrawn"]
+
+
+def today():
+    return date.today().isoformat()
+
+
+def now():
+    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+
+
+def load():
+    if not os.path.exists(DB):
+        return {}
+    with open(DB) as f:
+        return json.load(f)
+
+
+def save(db):
+    tmp = DB + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(db, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, DB)
+
+
+def slugify(*parts):
+    s = "-".join(p for p in parts if p)
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
+    s = re.sub(r"[^A-Za-z0-9]+", "-", s).strip("-").lower()
+    return re.sub(r"-{2,}", "-", s)[:60]
+
+
+# ---------------------------------------------------------------- docx writer
+def _esc(t):
+    return (t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
+def _para(text, bold=False, size=22, after=160, align=None):
+    runs = ""
+    # **bold** spans inside a paragraph
+    for i, chunk in enumerate(re.split(r"\*\*(.+?)\*\*", text)):
+        if not chunk:
+            continue
+        b = bold or (i % 2 == 1)
+        runs += (f'<w:r><w:rPr>{"<w:b/>" if b else ""}'
+                 f'<w:sz w:val="{size}"/><w:szCs w:val="{size}"/></w:rPr>'
+                 f'<w:t xml:space="preserve">{_esc(chunk)}</w:t></w:r>')
+    j = f'<w:jc w:val="{align}"/>' if align else ""
+    return (f'<w:p><w:pPr>{j}<w:spacing w:after="{after}" w:line="276" '
+            f'w:lineRule="auto"/></w:pPr>{runs}</w:p>')
+
+
+def write_docx(path, blocks):
+    """blocks: list of (text, kind) where kind in {h1,h2,p,blank}."""
+    body = ""
+    for text, kind in blocks:
+        if kind == "blank":
+            body += _para("", after=0)
+        elif kind == "h1":
+            body += _para(text, bold=True, size=28, after=200)
+        elif kind == "h2":
+            body += _para(text, bold=True, size=24, after=140)
+        else:
+            body += _para(text)
+    doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+           '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+           f'<w:body>{body}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/>'
+           '<w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134"/>'
+           '</w:sectPr></w:body></w:document>')
+    ct = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+          '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+          '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+          '<Default Extension="xml" ContentType="application/xml"/>'
+          '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+          '</Types>')
+    rels = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+            '</Relationships>')
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", ct)
+        z.writestr("_rels/.rels", rels)
+        z.writestr("word/document.xml", doc)
+
+
+def md_to_blocks(md):
+    blocks = []
+    for line in md.splitlines():
+        s = line.strip()
+        if not s:
+            blocks.append(("", "blank"))
+        elif s.startswith("## "):
+            blocks.append((s[3:], "h2"))
+        elif s.startswith("# "):
+            blocks.append((s[2:], "h1"))
+        elif s.startswith(("- ", "* ")):
+            blocks.append(("•  " + s[2:], "p"))
+        else:
+            blocks.append((s, "p"))
+    return blocks
+
+
+# -------------------------------------------------------------------- commands
+def cmd_new(a):
+    db = load()
+    slug = slugify(a.company, a.role)
+    if slug in db and not a.force:
+        sys.exit(f"{slug} already tracked (added {db[slug]['created']}). "
+                 f"Use --force to overwrite, or pick a different role name.")
+    d = os.path.join(APPS, slug)
+    os.makedirs(d, exist_ok=True)
+    jd = sys.stdin.read() if not sys.stdin.isatty() else ""
+    if jd.strip():
+        with open(os.path.join(d, "jd.md"), "w") as f:
+            f.write(f"# {a.role} - {a.company}\n\nSource: {a.url or 'n/a'}\n"
+                    f"Captured: {today()}\n\n---\n\n{jd.strip()}\n")
+    db[slug] = {
+        "slug": slug, "company": a.company, "role": a.role,
+        "url": a.url or "", "source": a.source, "status": "drafting",
+        "stage": "", "next_action": "write cover + answers, then submit",
+        "created": today(), "applied": "", "dir": d,
+        "history": [{"at": now(), "event": "created"}],
+    }
+    save(db)
+    print(f"slug: {slug}\ndir:  {d}")
+    print(f"jd:   {'saved' if jd.strip() else 'NOT saved (nothing on stdin)'}")
+
+
+def cmd_cover(a):
+    db = load()
+    r = db.get(a.slug) or sys.exit(f"unknown slug {a.slug}")
+    src = os.path.join(r["dir"], "cover.md")
+    if not os.path.exists(src):
+        sys.exit(f"no cover.md at {src} - write it first")
+    with open(src) as f:
+        md = f.read()
+    name = f"Cover_{slugify(r['company'])}_Arion_Caushi.docx"
+    out = os.path.join(r["dir"], name)
+    write_docx(out, md_to_blocks(md))
+    print(out)
+
+
+def cmd_set(a):
+    db = load()
+    r = db.get(a.slug) or sys.exit(f"unknown slug {a.slug}")
+    changed = {}
+    for kv in a.pairs:
+        if "=" not in kv:
+            sys.exit(f"expected key=value, got {kv}")
+        k, v = kv.split("=", 1)
+        k = {"note": "_note", "next": "next_action"}.get(k, k)
+        if k == "status" and v not in STATUSES:
+            sys.exit(f"status must be one of: {', '.join(STATUSES)}")
+        if k == "_note":
+            changed["note"] = v
+            continue
+        r[k] = v
+        changed[k] = v
+        if k == "status" and v == "applied" and not r.get("applied"):
+            r["applied"] = today()
+    r["history"].append({"at": now(), "event": "update", **changed})
+    save(db)
+    print(f"{a.slug}: " + ", ".join(f"{k}={v}" for k, v in changed.items()))
+
+
+def _row(r):
+    age = ""
+    if r.get("applied"):
+        age = f"{(date.today() - date.fromisoformat(r['applied'])).days}d"
+    return (f"{r['slug'][:34]:<34} {r['status']:<13} {age:>4}  "
+            f"{r['company'][:22]:<22} {r.get('next_action','')[:44]}")
+
+
+def cmd_list(a):
+    db = load()
+    rs = list(db.values())
+    if a.status:
+        rs = [r for r in rs if r["status"] == a.status]
+    elif not a.all:
+        rs = [r for r in rs if r["status"] not in ("rejected", "ghosted", "withdrawn")]
+    rs.sort(key=lambda r: (STATUSES.index(r["status"]), r["created"]))
+    if not rs:
+        print("nothing tracked yet" if not db else "no applications match")
+        return
+    print(f"{'SLUG':<34} {'STATUS':<13} {'AGE':>4}  {'COMPANY':<22} NEXT")
+    for r in rs:
+        print(_row(r))
+    print(f"\n{len(rs)} shown / {len(db)} tracked")
+
+
+def cmd_show(a):
+    db = load()
+    r = db.get(a.slug) or sys.exit(f"unknown slug {a.slug}")
+    print(json.dumps(r, indent=2, ensure_ascii=False))
+    if os.path.isdir(r["dir"]):
+        print("\nfiles: " + ", ".join(sorted(os.listdir(r["dir"]))) or "(none)")
+
+
+def cmd_find(a):
+    db = load()
+    q = a.text.lower()
+    toks = set(re.findall(r"[a-z0-9]{3,}", q))
+    hits = []
+    for r in db.values():
+        hay = set(re.findall(r"[a-z0-9]{3,}",
+                             f"{r['company']} {r['role']} {r['url']}".lower()))
+        score = len(toks & hay)
+        comp = r["company"].lower()
+        if comp in q:
+            score += 5
+        else:
+            # "Testco Ltd" should still match an email that only says "Testco"
+            head = re.sub(r"\b(ltd|limited|plc|inc|llc|group|uk|technologies|labs)\b",
+                          "", comp).strip()
+            if head and head in q:
+                score += 4
+        if score:
+            hits.append((score, r))
+    hits.sort(key=lambda t: -t[0])
+    if not hits:
+        print("no match - this may be an application that was never logged")
+        return
+    for score, r in hits[:5]:
+        print(f"{score:>3}  {_row(r)}")
+
+
+def cmd_stale(a):
+    db = load()
+    out = []
+    for r in db.values():
+        if r["status"] in ("applied", "acknowledged") and r.get("applied"):
+            d = (date.today() - date.fromisoformat(r["applied"])).days
+            if d >= a.days:
+                out.append((d, r))
+    out.sort(key=lambda t: -t[0])
+    if not out:
+        print(f"nothing silent for {a.days}+ days")
+        return
+    for d, r in out:
+        print(f"{d:>4}d  {r['company']} - {r['role']}  ({r['slug']})")
+
+
+def main():
+    p = argparse.ArgumentParser(prog="jobhunt", description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    n = sub.add_parser("new"); n.set_defaults(fn=cmd_new)
+    n.add_argument("-c", "--company", required=True)
+    n.add_argument("-r", "--role", required=True)
+    n.add_argument("-u", "--url", default="")
+    n.add_argument("-s", "--source", default="linkedin-easy",
+                   choices=["linkedin-easy", "company", "referral", "other"])
+    n.add_argument("--force", action="store_true")
+
+    c = sub.add_parser("cover"); c.set_defaults(fn=cmd_cover); c.add_argument("slug")
+    s = sub.add_parser("set"); s.set_defaults(fn=cmd_set)
+    s.add_argument("slug"); s.add_argument("pairs", nargs="+")
+    l = sub.add_parser("list"); l.set_defaults(fn=cmd_list)
+    l.add_argument("--status", choices=STATUSES); l.add_argument("--all", action="store_true")
+    sh = sub.add_parser("show"); sh.set_defaults(fn=cmd_show); sh.add_argument("slug")
+    f = sub.add_parser("find"); f.set_defaults(fn=cmd_find); f.add_argument("text")
+    st = sub.add_parser("stale"); st.set_defaults(fn=cmd_stale)
+    st.add_argument("--days", type=int, default=14)
+
+    a = p.parse_args()
+    a.fn(a)
+
+
+if __name__ == "__main__":
+    main()

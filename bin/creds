@@ -1,0 +1,185 @@
+#!/usr/bin/env python3
+"""creds - encrypted credential vault for ATS career-site accounts.
+
+AES-256-CBC via openssl with PBKDF2 (200k iterations). One master passphrase,
+taken from $JOBHUNT_KEY or prompted for. The vault holds ONLY career-site
+accounts created for job applications - never a bank, email, or primary account.
+
+  creds set <host> [--email E] [--password P|--gen]   store (prompts if omitted)
+  creds get <host> [--json]                           retrieve
+  creds list                                          hosts only, no secrets
+  creds gen [--length 20]                             generate a password
+  creds rm <host>
+  creds export                                        whole vault, for your password manager
+
+The vault is at jobhunt/.creds.enc. The master passphrase is read from, in order:
+$JOBHUNT_KEY, the key file at ~/.jobhunt-key, then a prompt.
+
+Why a key file: jobhunt lives on /mnt/c, a 9p mount of the Windows drive that
+ignores Unix modes - chmod 600 there silently stays 777, which is why the vault is
+encrypted at all. $HOME is ext4, where 600 is real. So the encrypted vault sits on
+the drive with no working permissions and its key sits on the drive that has them,
+and a copy of the Windows drive alone yields nothing. It also means the whole
+pipeline runs unattended, which a passphrase only a human knows cannot do.
+"""
+import argparse, getpass, json, os, secrets, string, subprocess, sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+VAULT = os.path.join(ROOT, ".creds.enc")
+ITER = "200000"
+
+ALPHABET = string.ascii_letters + string.digits + "!@#$%^&*-_=+?"
+
+
+KEYFILE = os.path.join(os.path.expanduser("~"), ".jobhunt-key")
+
+
+def _read_keyfile():
+    try:
+        with open(KEYFILE) as f:
+            k = f.read().strip()
+        return k or None
+    except OSError:
+        return None
+
+
+def _make_keyfile():
+    """Generate the master passphrase and store it on the filesystem that has
+    working permissions. Nobody has to remember it, which is the point."""
+    k = "".join(secrets.choice(ALPHABET) for _ in range(40))
+    fd = os.open(KEYFILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(k + "\n")
+    os.chmod(KEYFILE, 0o600)
+    print(f"created a new master passphrase at {KEYFILE} (mode 600)", file=sys.stderr)
+    return k
+
+
+def master():
+    k = os.environ.get("JOBHUNT_KEY")
+    if k:
+        return k
+    k = _read_keyfile()
+    if k:
+        return k
+    # No key file and no vault: this is first use, so generate the key rather than
+    # asking for one. A passphrase a human has to produce is the thing that stops
+    # an unattended run dead.
+    if not os.path.exists(VAULT):
+        return _make_keyfile()
+    if not sys.stdin.isatty():
+        sys.exit(f"vault exists but no key: no $JOBHUNT_KEY, no {KEYFILE}, and no terminal "
+                 "to prompt on")
+    return getpass.getpass("master passphrase: ")
+
+
+def _openssl(args, data, key):
+    p = subprocess.run(["openssl", "enc", *args, "-aes-256-cbc", "-pbkdf2",
+                        "-iter", ITER, "-pass", "env:JH_PASS"],
+                       input=data, capture_output=True,
+                       env={**os.environ, "JH_PASS": key})
+    if p.returncode != 0:
+        sys.exit("openssl: " + p.stderr.decode(errors="replace").strip())
+    return p.stdout
+
+
+def load(key):
+    if not os.path.exists(VAULT):
+        return {}
+    try:
+        return json.loads(_openssl(["-d"], open(VAULT, "rb").read(), key))
+    except json.JSONDecodeError:
+        sys.exit("vault did not decrypt to valid JSON - wrong passphrase?")
+
+
+def store(db, key):
+    blob = _openssl([], json.dumps(db, indent=2).encode(), key)
+    tmp = VAULT + ".tmp"
+    with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "wb") as f:
+        f.write(blob)
+    os.replace(tmp, VAULT)
+    os.chmod(VAULT, 0o600)
+
+
+def genpw(n=20):
+    while True:
+        p = "".join(secrets.choice(ALPHABET) for _ in range(n))
+        # most ATSes demand upper, lower, digit and symbol
+        if (any(c.islower() for c in p) and any(c.isupper() for c in p)
+                and any(c.isdigit() for c in p)
+                and any(c in "!@#$%^&*-_=+?" for c in p)):
+            return p
+
+
+def cmd_set(a, key):
+    db = load(key)
+    email = a.email or input(f"email for {a.host} [you@example.com]: ").strip() \
+        or "you@example.com"
+    if a.gen:
+        pw = genpw(a.length)
+        print(f"generated password: {pw}")
+    else:
+        pw = a.password or getpass.getpass(f"password for {a.host}: ")
+    db[a.host] = {"email": email, "password": pw, "note": a.note or ""}
+    store(db, key)
+    print(f"stored {a.host}")
+
+
+def cmd_get(a, key):
+    db = load(key)
+    r = db.get(a.host)
+    if not r:
+        sys.exit(f"no credentials for {a.host}")
+    print(json.dumps(r) if a.json else f"{r['email']}\n{r['password']}")
+
+
+def cmd_list(a, key):
+    db = load(key)
+    if not db:
+        print("vault empty")
+        return
+    for h, r in sorted(db.items()):
+        print(f"{h:<44} {r['email']}" + (f"  ({r['note']})" if r.get("note") else ""))
+
+
+def cmd_gen(a, key=None):
+    print(genpw(a.length))
+
+
+def cmd_rm(a, key):
+    db = load(key)
+    if db.pop(a.host, None) is None:
+        sys.exit(f"no credentials for {a.host}")
+    store(db, key)
+    print(f"removed {a.host}")
+
+
+def cmd_export(a, key):
+    print(json.dumps(load(key), indent=2))
+
+
+def main():
+    p = argparse.ArgumentParser(prog="creds", description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    s = p.add_subparsers(dest="cmd", required=True)
+
+    st = s.add_parser("set"); st.set_defaults(fn=cmd_set, needs_key=True)
+    st.add_argument("host"); st.add_argument("--email"); st.add_argument("--password")
+    st.add_argument("--gen", action="store_true"); st.add_argument("--length", type=int, default=20)
+    st.add_argument("--note", default="")
+
+    g = s.add_parser("get"); g.set_defaults(fn=cmd_get, needs_key=True)
+    g.add_argument("host"); g.add_argument("--json", action="store_true")
+
+    l = s.add_parser("list"); l.set_defaults(fn=cmd_list, needs_key=True)
+    gen = s.add_parser("gen"); gen.set_defaults(fn=cmd_gen, needs_key=False)
+    gen.add_argument("--length", type=int, default=20)
+    r = s.add_parser("rm"); r.set_defaults(fn=cmd_rm, needs_key=True); r.add_argument("host")
+    e = s.add_parser("export"); e.set_defaults(fn=cmd_export, needs_key=True)
+
+    a = p.parse_args()
+    a.fn(a, master() if a.needs_key else None)
+
+
+if __name__ == "__main__":
+    main()

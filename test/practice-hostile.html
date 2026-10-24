@@ -1,0 +1,166 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Hostile Ltd - Application</title>
+<!--
+  Every widget on this page is a failure mode that actually happened on a real
+  posting and was caught by Arion rather than by the tool. It exists so those
+  failures are caught by `printf 'f\nq\n' | node bin/autofill.mjs ... --url .../practice-hostile.html`
+  instead of by an employer receiving a half-empty application.
+
+  What each field is for:
+   q1  click-to-edit cell - no input exists until the container is clicked (Retable)
+   q2  dropdown rendered as a <button>, not a <select> (Retable, no-code builders)
+   q3  input[type=date] fed prose - silently discards anything but YYYY-MM-DD (Teamtailor)
+   q4  dial-code selector + number field - the "+44 +44 7700..." trap (Greenhouse, Ashby)
+   q5  a controlled input that DISCARDS typed text on blur - the core "the input
+       did not go through" case: it IS answered from answers.json, it looks filled,
+       and it is empty again by the read-back (React comboboxes)
+   q9  a question with no matcher and no bank entry - must surface as a decision
+   q6  a required question with no reachable control at all - must be reported as a
+       ghost, because the failure that costs an application is silence, not an error
+   q10 a section folded shut - its field does not exist until the toggle is clicked
+   q11 a "Location" belonging to an employment row, which must NOT get the
+       candidate's home city
+   q7  an sr-only hidden input behind a visible fake widget - typing into it reports
+       success while the visible control still says "Select an option" (Teamtailor)
+   q12 a bot trap - a hidden-in-plain-sight input the form uses to identify
+       automation. The `portfolio` matcher filled Workday's ("Enter website. This
+       input is for robots only...") on a live application. Filling it is worse
+       than any blank: the submission is discarded silently. Must stay EMPTY.
+   q13 a Next button covered by a transparent overlay - enabled, visible, in the
+       viewport, and unclickable, which Playwright reports only as "Timeout
+       exceeded". Workday's Create Account. Must still be pressed, from the
+       keyboard, and the report must say that is what happened.
+-->
+<style>
+  body { font: 15px system-ui; max-width: 40rem; margin: 2rem auto; }
+  .row { margin: 1.1rem 0; }
+  label { display: block; font-weight: 600; margin-bottom: .25rem; }
+  input, textarea, button { font: inherit; padding: .4rem; width: 100%; box-sizing: border-box; }
+  .cell { border: 1px solid #bbb; padding: .45rem; color: #888; cursor: text; border-radius: 3px; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
+  .menu { border: 1px solid #bbb; display: none; }
+  .menu.open { display: block; }
+  .menu div { padding: .35rem .5rem; cursor: pointer; }
+  .ph { display: none; }
+</style>
+
+<h1>Hostile Ltd - Graduate Software Engineer</h1>
+<form onsubmit="return false">
+
+  <div class="row">
+    <label for="ignored1">Preferred office *</label>
+    <div class="link-container cell" tabindex="0" role="textbox"
+         onclick="this.innerHTML='<input id=q1real name=office>';this.querySelector('input').focus()">
+      Click to enter
+    </div>
+  </div>
+
+  <div class="row">
+    <label>Notice period *</label>
+    <button type="button" class="dropdown-toggle" aria-haspopup="listbox"
+            onclick="this.nextElementSibling.classList.toggle('open')">Select an option</button>
+    <div class="menu" role="listbox">
+      <div role="option" onclick="pick(this)">None - available immediately</div>
+      <div role="option" onclick="pick(this)">One month</div>
+      <div role="option" onclick="pick(this)">Three months</div>
+    </div>
+  </div>
+
+  <div class="row">
+    <label for="q3">Earliest start date *</label>
+    <input type="date" id="q3" name="start_date">
+  </div>
+
+  <div class="row">
+    <label for="q4">Mobile number *</label>
+    <select id="q4cc" style="width:auto"><option>United Kingdom +44</option><option>Ireland +353</option></select>
+    <input id="q4" name="phone" placeholder="Phone number">
+  </div>
+
+  <div class="row">
+    <label for="q5">Why do you want to work here? *</label>
+    <!-- the shape of a React controlled input: the DOM value is thrown away
+         unless the framework's own state was updated, which a synthetic type
+         never does. Looks filled while focused, empty the moment it blurs. -->
+    <input id="q5" name="team" role="combobox" aria-autocomplete="list"
+           onblur="this.value=''">
+  </div>
+
+  <div class="row">
+    <label>Do you require a work permit for the United Kingdom? *</label>
+    <!-- no control of any kind: the real page builds it in JS that never ran -->
+  </div>
+
+  <div class="row">
+    <label>Highest qualification *</label>
+    <span id="q7shown">Select an option</span>
+    <input class="sr-only" id="q7" name="qualification" data-common--dropdown-target="hiddenInput">
+  </div>
+
+  <div class="row">
+    <label for="q9">Describe a time you shipped something under a deadline *</label>
+    <textarea id="q9" name="q9" maxlength="1200" rows="3"></textarea>
+  </div>
+
+  <div class="row">
+    <label for="q8">Email address *</label>
+    <input id="q8" name="email" type="email">
+  </div>
+
+  <!-- q10: a section folded shut. Its field does not exist until the toggle is
+       clicked, so it is not a control, not a label and not a ghost - the exact
+       shape that let an application go in with a blank employment history. -->
+  <div class="row">
+    <div id="sechdr">Work Experience <button type="button" id="sectoggle"
+        aria-expanded="false" onclick="openSec()">+</button></div>
+    <div id="secbody"></div>
+  </div>
+
+  <!-- q11: "Location" inside an employment row means the EMPLOYER's location.
+       A generic location matcher wrote the candidate's home city here, against
+       three different employers. Wrong data is worse than a blank. -->
+  <div class="row" id="we-entry">
+    <label for="we0title">Job Title *</label>
+    <input id="we0title" name="NewWorkExperience_JobTitle1" value="AI Innovation Intern">
+    <label for="we0org">Company / Organization *</label>
+    <input id="we0org" name="NewWorkExperience_Organization1" value="Example Ltd">
+    <label for="we0loc">Location</label>
+    <input id="we0loc" name="NewWorkExperience_Location1">
+  </div>
+
+  <!-- q12: the bot trap. Labelled to look exactly like a website/portfolio field,
+       because that is the point of it. Nothing may ever type in here. -->
+  <div class="row">
+    <label for="hp">Enter website. This input is for robots only, do not enter if you're human.</label>
+    <input id="hp" name="website_url_hp">
+  </div>
+
+  <button type="submit">Submit application</button>
+</form>
+
+<!-- q13: a Next button with a transparent sheet laid over it. Not a cookie banner
+     and not full-page, so it cannot just be dismissed - the only way through is to
+     focus the button and press Enter, the way a keyboard user would. -->
+<div style="position: relative; margin-top: 1.5rem;">
+  <button type="button" id="nextbtn"
+          onclick="document.getElementById('step2').innerHTML =
+            '<h2>Step 2 of 2</h2><label for=&quot;s2li&quot;>LinkedIn profile *</label>'
+            + '<input id=&quot;s2li&quot; name=&quot;linkedin&quot; required>';">Next</button>
+  <div id="veil" style="position:absolute; inset:-6px; background:rgba(0,0,0,0); z-index:5;"></div>
+</div>
+<p id="step2"></p>
+
+<script>
+  function openSec() {
+    const b = document.getElementById('secbody');
+    if (b.children.length) return;
+    b.innerHTML = '<label for="secjob">Job Title *</label><input id="secjob" name="NewWorkExperience_JobTitle0">';
+    document.getElementById('sectoggle').setAttribute('aria-expanded', 'true');
+  }
+  function pick(el) {
+    const menu = el.closest('.menu');
+    menu.previousElementSibling.textContent = el.textContent;
+    menu.classList.remove('open');
+  }
+</script>

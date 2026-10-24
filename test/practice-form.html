@@ -1,0 +1,40 @@
+<!-- A fake ATS form for dry-running bin/autofill.mjs. No network, no employer. -->
+<html><head><title>Practice ATS - Graduate Software Engineer</title>
+<style>body{font:15px system-ui;max-width:620px;margin:40px auto;padding:0 20px}
+label{display:block;margin:14px 0 4px;font-weight:600}
+input,select,textarea{width:100%;padding:8px;border:1px solid #bbb;border-radius:4px}
+textarea{height:90px}h1{font-size:20px}button{margin-top:20px;padding:10px 18px}
+.note{background:#fffbe6;border:1px solid #e8d48b;padding:10px;border-radius:4px}</style></head>
+<body><h1>Graduate Software Engineer - application</h1>
+<p class="note">Practice form. Nothing here is submitted anywhere.</p>
+<form onsubmit="alert('This is the practice form - nothing was sent.');return false">
+<label for="a">First name</label><input id="a" name="first_name">
+<label for="b">Last name</label><input id="b" name="last_name">
+<label for="c">Email address</label><input id="c" name="email" type="email">
+<label for="d">Mobile number</label><input id="d" name="phone">
+<label for="e">Street address</label><input id="e" name="addr">
+<label for="f">City / Town</label><input id="f" name="city">
+<label for="g">Postcode</label><input id="g" name="postcode">
+<label for="h">LinkedIn profile</label><input id="h" name="linkedin">
+<label for="i">GitHub</label><input id="i" name="github">
+<label for="j">University / institution</label><input id="j" name="uni">
+<label for="k">Degree / programme</label><input id="k" name="degree">
+<label for="l">Expected graduation date</label><input id="l" name="grad">
+<label for="m">Degree classification</label><input id="m" name="grade">
+<label for="n">Do you have the right to work in the UK?</label>
+  <select id="n" name="rtw"><option></option><option>Yes</option><option>No</option></select>
+<label for="o">Will you now or in the future require visa sponsorship?</label><input id="o" name="spon">
+<label for="p">Notice period</label><input id="p" name="notice">
+<label for="q">Earliest start date</label><input id="q" name="start">
+<label for="r">Salary expectations</label><input id="r" name="salary">
+<label for="s">How did you hear about this role?</label>
+  <select id="s" name="src"><option></option><option>LinkedIn</option><option>Indeed</option>
+  <option>Company website</option></select>
+<label for="t">Why do you want to work here?</label><textarea id="t" name="why"></textarea>
+<label for="u">Cover letter</label><textarea id="u" name="cover"></textarea>
+<label for="v">Upload your CV</label><input id="v" name="cv" type="file">
+<label for="w">Are you willing to relocate?</label><input id="w" name="reloc">
+<label for="x">Preferred pronouns</label><input id="x" name="pronouns">
+<label><input type="checkbox" name="agree" style="width:auto"> I accept the privacy policy</label>
+<button type="submit">Submit application</button>
+</form></body></html>

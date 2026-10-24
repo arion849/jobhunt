@@ -1,0 +1,9 @@
+<html><head><title>Practice - security code</title>
+<style>body{font:15px system-ui;max-width:640px;margin:60px auto}
+input{width:40px;height:48px;text-align:center;font-size:20px;margin-right:6px}</style></head>
+<body><p>A verification code was sent to you@example.com. Enter the 8-character code.</p>
+<label>Security code</label><br>
+<div id="box"></div>
+<script>document.getElementById('box').innerHTML =
+  Array.from({length:8},(_,i)=>`<input maxlength="1" id="d${i}">`).join('');</script>
+</body></html>

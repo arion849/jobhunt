@@ -1,0 +1,9 @@
+node_modules/
+profile.yaml
+applications.json
+apps/
+cv/
+qa-bank.json
+.creds.enc
+.browser/
+*.docx
